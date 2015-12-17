@@ -218,7 +218,7 @@ class LogStash::Outputs::S3 < LogStash::Outputs::Base
     @logger.debug("S3: Creating a test file on S3")
 
     test_filename = File.join(@temporary_directory,
-                              "logstash-programmatic-access-test-object-#{Time.now.to_i}")
+                              "logstash-programmatic-access-test-object-#{Time.now.utc.to_i}")
 
     File.open(test_filename, 'a') do |file|
       file.write('test')
@@ -267,8 +267,8 @@ class LogStash::Outputs::S3 < LogStash::Outputs::Base
 
   public
   def get_temporary_filename(page_counter = 0)
-    current_time = Time.now
-    filename = "ls.s3.#{Socket.gethostname}.#{current_time.strftime("%Y-%m-%dT%H.%M")}"
+    current_time = Time.now.utc
+    filename = "#{current_time.strftime("%Y-%m-%dT%H.%M.%S")}-#{SecureRandom.hex}"
 
     if @tags.size > 0
       return "#{filename}.tag_#{@tags.join('.')}.part#{page_counter}.#{TEMPFILE_EXTENSION}"
