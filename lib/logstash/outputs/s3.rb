@@ -111,6 +111,9 @@ class LogStash::Outputs::S3 < LogStash::Outputs::Base
   # Specify how many workers to use to upload the files to S3
   config :upload_workers_count, :validate => :number, :default => 1
 
+  # Maximum count of files pending upload to S3. When the limit is met, plugin will block pipeline from progressing.
+  config :max_pending_files, :validate => :number, :default => 0
+
   # Exposed attributes for testing purpose.
   attr_accessor :tempfile
   attr_reader :page_counter
@@ -186,6 +189,9 @@ class LogStash::Outputs::S3 < LogStash::Outputs::Base
 
     @s3 = aws_s3_config
     @upload_queue = Queue.new
+    @upload_queue.extend(MonitorMixin)
+    @upload_queue_full_cond = @upload_queue.new_cond
+
     @file_rotation_lock = Mutex.new
 
     if @prefix && @prefix =~ S3_INVALID_CHARACTERS
@@ -328,6 +334,12 @@ class LogStash::Outputs::S3 < LogStash::Outputs::Base
 
   private
   def handle_event(encoded_event)
+    @upload_queue.synchronize do
+      # block pipeline while @upload_queue has too many items
+      @logger.debug("upload queue length", :length => @upload_queue.length, :max_pending_files => @max_pending_files)
+      @upload_queue_full_cond.wait_while { @upload_queue.length > @max_pending_files }
+    end
+
     if write_events_to_multiple_files?
       if rotate_events_log?
         @logger.debug("S3: tempfile is too large, let's bucket it and create new file", :tempfile => File.basename(@tempfile))
@@ -338,7 +350,7 @@ class LogStash::Outputs::S3 < LogStash::Outputs::Base
       else
         @logger.debug("S3: tempfile file size report.", :tempfile_size => @tempfile.size, :size_file => @size_file)
       end
-    end 
+    end
 
     write_to_tempfile(encoded_event)
   end
@@ -377,15 +389,25 @@ class LogStash::Outputs::S3 < LogStash::Outputs::Base
 
   private
   def upload_worker
-    file = @upload_queue.deq
+    begin
+      file = @upload_queue.deq
 
-    case file
-      when LogStash::ShutdownEvent
-        @logger.debug("S3: upload worker is shutting down gracefuly")
-        @upload_queue.enq(LogStash::ShutdownEvent)
-      else
-        @logger.debug("S3: upload working is uploading a new file", :filename => File.basename(file))
-        move_file_to_bucket(file)
+      @upload_queue.synchronize do
+        # notify other threads that wait on queue ready to accept new items
+        @upload_queue_full_cond.broadcast
+      end
+
+      case file
+        when LogStash::ShutdownEvent
+          @logger.debug("S3: upload worker is shutting down gracefuly")
+          @upload_queue.enq(LogStash::ShutdownEvent)
+        else
+          @logger.debug("S3: upload worker is uploading a new file", :filename => File.basename(file))
+          move_file_to_bucket(file)
+      end
+    rescue Exception => ex
+      @logger.error("upload_worker exception", :ex => ex.backtrace)
+      raise
     end
   end
 
