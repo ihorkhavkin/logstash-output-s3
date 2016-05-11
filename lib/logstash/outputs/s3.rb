@@ -381,7 +381,12 @@ class LogStash::Outputs::S3 < LogStash::Outputs::Base
         while true do
           @logger.debug("S3: upload worker is waiting for a new file to upload.", :worker_id => worker_id)
 
-          upload_worker
+          begin
+            upload_worker
+          rescue Exception => ex
+            @logger.error('upload_worker unhandled exception', :ex => ex, :backtrace => ex.backtrace)
+            raise LogStash::Error, 'S3: uploader thread exited unexpectedly'
+          end
         end
       end
     end
@@ -389,6 +394,7 @@ class LogStash::Outputs::S3 < LogStash::Outputs::Base
 
   private
   def upload_worker
+    file = nil
     begin
       file = @upload_queue.deq
 
@@ -406,8 +412,9 @@ class LogStash::Outputs::S3 < LogStash::Outputs::Base
           move_file_to_bucket(file)
       end
     rescue Exception => ex
-      @logger.error("upload_worker exception", :ex => ex.backtrace)
-      raise
+      @logger.error("failed to upload, will re-enqueue #{file} for upload",
+                    :ex => ex, :backtrace => ex.backtrace)
+      @upload_queue.enq(file)
     end
   end
 
