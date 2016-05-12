@@ -329,7 +329,7 @@ class LogStash::Outputs::S3 < LogStash::Outputs::Base
   private
   def shutdown_upload_workers
     @logger.debug("S3: Gracefully shutdown the upload workers")
-    @upload_queue << LogStash::ShutdownEvent
+    @upload_queue << LogStash::SHUTDOWN
   end
 
   private
@@ -403,13 +403,12 @@ class LogStash::Outputs::S3 < LogStash::Outputs::Base
         @upload_queue_full_cond.broadcast
       end
 
-      case file
-        when LogStash::ShutdownEvent
-          @logger.debug("S3: upload worker is shutting down gracefuly")
-          @upload_queue.enq(LogStash::ShutdownEvent)
-        else
-          @logger.debug("S3: upload worker is uploading a new file", :filename => File.basename(file))
-          move_file_to_bucket(file)
+      if file.is_a? LogStash::ShutdownEvent
+        @logger.debug("S3: upload worker is shutting down gracefuly")
+        @upload_queue.enq(LogStash::SHUTDOWN)
+      else
+        @logger.debug("S3: upload worker is uploading a new file", :filename => File.basename(file))
+        move_file_to_bucket(file)
       end
     rescue Exception => ex
       @logger.error("failed to upload, will re-enqueue #{file} for upload",
