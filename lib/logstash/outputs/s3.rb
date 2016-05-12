@@ -413,7 +413,9 @@ class LogStash::Outputs::S3 < LogStash::Outputs::Base
     rescue Exception => ex
       @logger.error("failed to upload, will re-enqueue #{file} for upload",
                     :ex => ex, :backtrace => ex.backtrace)
-      @upload_queue.enq(file)
+      unless file.nil?
+        @upload_queue.enq(file)
+      end
     end
   end
 
